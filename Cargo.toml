@@ -2,15 +2,15 @@
 name = "metawrite"
 version = "0.1.0"
 edition = "2024"
-license = "LGPL-3.0-OR-LATER"
+license = "GPL-3.0-OR-LATER"
 
 [dependencies]
-bevy = "0.16.1"
+bevy = {version = "0.16.1", features = ["wayland"]}
 
 
 [profile.profile]
 inherits = "release"
-lto = true
+lto = "thin"
 opt-level = 3
 codegen-units = 1
 incremental = true

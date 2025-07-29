@@ -4,20 +4,26 @@ pub mod draw;
 use std::time::Duration;
 
 use bevy::{
-    app::{App, Startup, Update}, color::*, core_pipeline::{fxaa::Fxaa, smaa::Smaa}, ecs::system::Commands, gizmos::gizmos::Gizmos, input::{mouse::MouseButtonInput, ButtonState}, math::{cubic_splines::*, vec2}, prelude::*, winit::WinitSettings
+    app::{App, Startup, Update},
+    color::*,
+    core_pipeline::{fxaa::Fxaa, smaa::Smaa},
+    ecs::system::Commands,
+    gizmos::gizmos::Gizmos,
+    input::{ButtonState, mouse::MouseButtonInput, touch::TouchPhase},
+    math::{cubic_splines::*, vec2},
+    prelude::*,
+    winit::WinitSettings,
 };
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(
-            WindowPlugin {
-                primary_window: Some(Window {
-                    present_mode: bevy::window::PresentMode::AutoNoVsync,
-                    ..Default::default()   
-                }),
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: bevy::window::PresentMode::AutoNoVsync,
                 ..Default::default()
-            }
-        ))
+            }),
+            ..Default::default()
+        }))
         .insert_resource(WinitSettings::desktop_app())
         .add_systems(Startup, setup)
         .add_systems(
@@ -25,6 +31,7 @@ fn main() {
             (
                 handle_keypress,
                 handle_mouse_move,
+                handle_touch_state,
                 handle_mouse_press,
                 draw_edit_move,
                 update_spline_mode_text,
@@ -43,6 +50,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(spline_mode);
     let cycling_mode = CyclingMode::default();
     commands.insert_resource(cycling_mode);
+    commands.insert_resource(TouchMove::default());
 
     // Starting data for [`ControlPoints`]:
     let default_points = vec![
@@ -75,12 +83,9 @@ fn setup(mut commands: Commands) {
 
     commands.spawn(Camera2d).insert(Fxaa::default());
 
-
     // The instructions and modes are rendered on the left-hand side in a column.
     let instructions_text = "Draw on the screen.\n\
-        R: Remove the last control point\n\
-        S: Cycle the spline construction being used\n\
-        C: Toggle cyclic curve construction";
+        R: Remove the last control point\n";
     let spline_mode_text = format!("Spline: {spline_mode}");
     let cycling_mode_text = format!("{cycling_mode}");
     let style = TextFont::default();
@@ -149,7 +154,7 @@ struct Curve(CubicCurve<Vec2>);
 
 #[derive(Clone, Component)]
 struct ProcessedCurve {
-    interp: Vec<Vec2>
+    interp: Vec<Vec2>,
 }
 
 /// The control points used to generate a curve. The tangent components are only used in the case of
@@ -188,14 +193,22 @@ fn draw_curve(curves: Query<&Curve, With<Curve>>, mut gizmos: Gizmos, current: R
         //    curve.0.iter_positions(resolution).map(|pt| pt.extend(0.0)),
         //    Color::srgb(1.0, 1.0, 1.0),
         //);
-        gizmos.curve_2d(&curve.0, (0..resolution).map(|n| n as f32/100.0),Color::srgb(1.0, 1.0, 1.0));
+        gizmos.curve_2d(
+            &curve.0,
+            (0..resolution).map(|n| n as f32 / 100.0),
+            Color::srgb(1.0, 1.0, 1.0),
+        );
     }
     // Form current curve.
     let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
         return;
     };
     let resolution = 100 * curve.0.segments().len();
-    gizmos.curve_2d(&curve.0, (0..resolution).map(|n| n as f32/100.0),Color::srgb(1.0, 1.0, 1.0));
+    gizmos.curve_2d(
+        &curve.0,
+        (0..resolution).map(|n| n as f32 / 100.0),
+        Color::srgb(1.0, 1.0, 1.0),
+    );
 }
 
 /// This system uses gizmos to draw the current [control points] as circles, displaying their
@@ -233,21 +246,24 @@ fn form_curve(
             match cycling_mode {
                 CyclingMode::NotCyclic => spline.to_curve().ok(),
                 CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }.map(|x| Curve(x))
+            }
+            .map(|x| Curve(x))
         }
         SplineMode::Cardinal => {
             let spline = CubicCardinalSpline::new_catmull_rom(points);
             match cycling_mode {
                 CyclingMode::NotCyclic => spline.to_curve().ok(),
                 CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }.map(|x| Curve(x))
+            }
+            .map(|x| Curve(x))
         }
         SplineMode::B => {
             let spline = CubicBSpline::new(points);
-           match cycling_mode {
+            match cycling_mode {
                 CyclingMode::NotCyclic => spline.to_curve().ok(),
                 CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }.map(|x| Curve(x))
+            }
+            .map(|x| Curve(x))
         }
     }
 }
@@ -307,6 +323,11 @@ struct MouseEditMove {
     start: Option<Vec2>,
 }
 
+#[derive(Clone, Default, Resource)]
+struct TouchMove {
+    which: Option<u64>,
+}
+
 /// The current mouse position, if known.
 #[derive(Clone, Default, Resource)]
 struct MousePosition(Option<Vec2>);
@@ -314,8 +335,11 @@ struct MousePosition(Option<Vec2>);
 /// Update the current cursor position and track it in the [`MousePosition`] resource.
 fn handle_mouse_move(
     mut cursor_events: EventReader<CursorMoved>,
+    mut touch_events: EventReader<TouchInput>,
     mut mouse_position: ResMut<MousePosition>,
+
     mut control_points: ResMut<CurrentCurve>,
+    mut touch_state: ResMut<TouchMove>,
     edit_move: Res<MouseEditMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
@@ -327,12 +351,33 @@ fn handle_mouse_move(
         };
         let (camera, camera_transform) = *camera;
         // Put current position as control point.
-        let Ok(current) = camera.viewport_to_world_2d(camera_transform, cursor_event.position) else {
-            return
+        let Ok(current) = camera.viewport_to_world_2d(camera_transform, cursor_event.position)
+        else {
+            return;
         };
-        control_points.points_and_tangents.push((current,vec2(0., 0.)));
+        control_points
+            .points_and_tangents
+            .push((current, vec2(0., 0.)));
+    }
 
-
+    debug!("Reading movements...");
+    for touch_event in touch_events.read() {
+        debug!("touch {:?}", touch_event);
+        if Some(touch_event.id) == touch_state.which {
+            // Consider only the first touch (single touch)
+            mouse_position.0 = Some(touch_event.position);
+            let Some(_) = edit_move.start else {
+                return;
+            };
+            let (camera, camera_transform) = *camera;
+            let Ok(current) = camera.viewport_to_world_2d(camera_transform, touch_event.position)
+            else {
+                return;
+            };
+            control_points
+                .points_and_tangents
+                .push((current, vec2(0., 0.)));
+        }
     }
 }
 
@@ -340,10 +385,12 @@ fn handle_mouse_move(
 /// of the click-and-drag motion which actually creates new control points.
 fn handle_mouse_press(
     mut button_events: EventReader<MouseButtonInput>,
+    mut touch_events: EventReader<TouchInput>, // Add this line
     mouse_position: Res<MousePosition>,
     mut edit_move: ResMut<MouseEditMove>,
     mut current_strip: ResMut<CurrentCurve>,
     mut commands: Commands,
+    mut touch_state: ResMut<TouchMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
     let Some(mouse_pos) = mouse_position.0 else {
@@ -365,11 +412,14 @@ fn handle_mouse_press(
                 // This press represents the start of the edit move.
                 let (camera, camera_transform) = *camera;
                 edit_move.start = Some(mouse_pos);
-                let Ok(start_point) = camera.viewport_to_world_2d(camera_transform, mouse_pos) else {
+                let Ok(start_point) = camera.viewport_to_world_2d(camera_transform, mouse_pos)
+                else {
                     continue;
                 };
                 current_strip.points_and_tangents.clear();
-                current_strip.points_and_tangents.push((start_point,vec2(0., 0.)));
+                current_strip
+                    .points_and_tangents
+                    .push((start_point, vec2(0., 0.)));
             }
 
             ButtonState::Released => {
@@ -395,16 +445,82 @@ fn handle_mouse_press(
 
                 // Reset the edit move since we've consumed it.
                 edit_move.start = None;
-                
 
-                let curve = form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
+                let curve =
+                    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
                 if let Some(curve) = curve {
                     commands.spawn((Curve(curve.0),));
                 }
                 current_strip.points_and_tangents.clear();
-
-
             }
+        }
+
+    }
+}
+
+fn handle_touch_state(
+    mut touch_events: EventReader<TouchInput>, // Add this line
+    mut edit_move: ResMut<MouseEditMove>,
+    mut current_strip: ResMut<CurrentCurve>,
+    mut commands: Commands,
+    mut touch_state: ResMut<TouchMove>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+) {
+    //let Some(mouse_pos) = mouse_position.0 else {
+    //    return;
+    //};
+
+    // Handle click and drag behavior
+
+    for touch_event in touch_events.read() {
+        // Consider only the first touch (single touch)
+        debug!("Touch event {:?}", touch_event);
+        match touch_event.phase {
+            TouchPhase::Started => {
+                if touch_state.which.is_some() {
+                    continue;
+                }
+                let (camera, camera_transform) = *camera;
+                edit_move.start = Some(touch_event.position);
+                touch_state.which = Some(touch_event.id);
+                let Ok(start_point) =
+                    camera.viewport_to_world_2d(camera_transform, touch_event.position)
+                else {
+                    continue;
+                };
+                current_strip.points_and_tangents.clear();
+                current_strip
+                    .points_and_tangents
+                    .push((start_point, vec2(0., 0.)));
+            }
+            TouchPhase::Ended => {
+                let Some(start) = edit_move.start else {
+                    continue;
+                };
+
+                let (camera, camera_transform) = *camera;
+
+                let Ok(point) = camera.viewport_to_world_2d(camera_transform, start) else {
+                    continue;
+                };
+                let Ok(end_point) =
+                    camera.viewport_to_world_2d(camera_transform, touch_event.position)
+                else {
+                    continue;
+                };
+                let tangent = end_point - point;
+
+                edit_move.start = None;
+                touch_state.which = None;
+
+                let curve =
+                    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
+                if let Some(curve) = curve {
+                    commands.spawn((Curve(curve.0),));
+                }
+                current_strip.points_and_tangents.clear();
+            }
+            _ => {} // Do nothing for Moved or Cancelled phases here
         }
     }
 }
