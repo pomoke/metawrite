@@ -14,16 +14,42 @@ use bevy::{
     prelude::*,
     winit::WinitSettings,
 };
+use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                present_mode: bevy::window::PresentMode::AutoNoVsync,
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode: bevy::window::PresentMode::AutoNoVsync,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
-            ..Default::default()
-        }))
+            FpsOverlayPlugin {
+                config: FpsOverlayConfig {
+                    text_config: TextFont {
+                        // Here we define size of our overlay
+                        font_size: 24.0,
+                        // If we want, we can use a custom font
+                        font: default(),
+                        // We could also disable font smoothing,
+                        font_smoothing: bevy::text::FontSmoothing::AntiAliased,
+                        ..default()
+                    },
+                    // We can also change color of the overlay
+                    text_color: Color::Srgba(Srgba {
+                        red: 0.,
+                        green: 1.,
+                        blue: 0.,
+                        alpha: 1.,
+                    }),
+                    // We can also set the refresh interval for the FPS counter
+                    refresh_interval: core::time::Duration::from_millis(100),
+                    enabled: true,
+                },
+            },
+        ))
         .insert_resource(WinitSettings::desktop_app())
         .add_systems(Startup, setup)
         .add_systems(
@@ -36,6 +62,7 @@ fn main() {
                 draw_edit_move,
                 update_spline_mode_text,
                 update_cycling_mode_text,
+                curve_fill,
                 draw_curve,
                 draw_control_points,
             )
@@ -183,30 +210,35 @@ struct CurrentCurve {
 
 /// This system uses gizmos to draw the current [`Curve`] by breaking it up into a large number
 /// of line segments.
-fn draw_curve(curves: Query<&Curve, With<Curve>>, mut gizmos: Gizmos, current: Res<CurrentCurve>) {
+fn draw_curve(
+    curves: Query<&ProcessedCurve, (With<Curve>, With<ProcessedCurve>)>,
+    mut gizmos: Gizmos,
+    current: Res<CurrentCurve>,
+) {
     // Scale resolution with curve length so it doesn't degrade as the length increases.
 
     // Gizmos is not parallel.
     for curve in curves {
-        let resolution = 100 * curve.0.segments().len();
+        //let resolution = 100 * curve..segments().len();
         //gizmos.linestrip(
         //    curve.0.iter_positions(resolution).map(|pt| pt.extend(0.0)),
         //    Color::srgb(1.0, 1.0, 1.0),
         //);
-        gizmos.curve_2d(
-            &curve.0,
-            (0..resolution).map(|n| n as f32 / 100.0),
-            Color::srgb(1.0, 1.0, 1.0),
-        );
+        //gizmos.curve_2d(
+        //    &curve.0,
+        //    (0..resolution).map(|n| n as f32 / 100.0),
+        //    Color::srgb(1.0, 1.0, 1.0),
+        //);
+        gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
     }
-    // Form current curve.
+    // Form current curve. To be optimized.
     let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
         return;
     };
-    let resolution = 100 * curve.0.segments().len();
+    let resolution = 3 * curve.0.segments().len();
     gizmos.curve_2d(
         &curve.0,
-        (0..resolution).map(|n| n as f32 / 100.0),
+        (0..resolution).map(|n| n as f32 / 3. as f32),
         Color::srgb(1.0, 1.0, 1.0),
     );
 }
@@ -454,7 +486,6 @@ fn handle_mouse_press(
                 current_strip.points_and_tangents.clear();
             }
         }
-
     }
 }
 
@@ -587,4 +618,20 @@ fn handle_keypress(
     if keyboard.just_pressed(KeyCode::KeyQ) {
         std::process::exit(0);
     }
+}
+
+fn curve_fill(
+    mut par_commands: ParallelCommands,
+    mut touch_state: ResMut<TouchMove>,
+    mut curves: Query<(Entity, &Curve), (With<Curve>, Without<ProcessedCurve>)>,
+) {
+    curves.par_iter().for_each(|(id, curve)| {
+        let resolution = 9 * curve.0.segments().len();
+        let points: Vec<_> = curve.0.iter_positions(resolution).collect();
+        par_commands.command_scope(|mut commands| {
+            commands
+                .entity(id)
+                .insert(ProcessedCurve { interp: points });
+        })
+    });
 }

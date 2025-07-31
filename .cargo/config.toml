@@ -1,3 +1,20 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = [
+	"-C", "link-arg=-static",
+	"-C", "target-feature=+crt-static",
+	"-C", "link-arg=-fuse-ld=ld.lld"
+]
+
+#[target.aarch64-unknown-linux-musl]
+#
+#linker = "aarch64-unknown-linux-musl-clang"
+#rustflags = [
+#	#"-C", "link-arg=-lclang_rt"
+#	"-C", "link-arg=-fuse-ld=mold",
+#	"-C", "target-feature=-crt-static",
+#]
+#rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld.lld,-v"]
