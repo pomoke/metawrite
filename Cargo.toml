@@ -10,12 +10,11 @@ bevy_dev_tools = "0.16.1"
 #bevy_prototype_lyon = "0.13.0"
 
 [patch.crates-io]
-wgpu = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
-wgpu-types = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
-wgpu-core = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
-wgpu-hal = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
-naga = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
-
+#wgpu = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
+#wgpu-types = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
+#wgpu-core = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
+#wgpu-hal = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
+#naga = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}
 
 [profile.profile]
 inherits = "release"
