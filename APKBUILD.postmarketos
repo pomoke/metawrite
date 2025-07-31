@@ -1,0 +1,27 @@
+# Contributor:
+# Maintainer:
+pkgname=metawrite
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="some writing"
+url="https://github.com/pomoke/metawrite"
+arch="all"
+license="GPL-3.0"
+depends="libx11 alsa-lib eudev"
+makedepends="cargo gcc libc-dev pkgconf libx11-dev alsa-lib-dev eudev-dev vulkan-headers wayland-dev mold clang"
+#checkdepends=""
+#install=""
+#$subpackages="$pkgname-dev $pkgname-doc"
+source="https://github.com/pomoke/metawrite/archive/94c4fa8d6e9a921fb85123a39936922ad024dfe7.zip"
+builddir="$srcdir/metawrite-94c4fa8d6e9a921fb85123a39936922ad024dfe7"
+
+build() {
+        cargo build --locked
+}
+
+package() {
+        # Replace with proper package command(s)
+        install -Dm755 target/debug/metawrite \
+		-t "$pkgdir"/usr/bin/
+
+}
