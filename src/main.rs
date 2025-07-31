@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use bevy::{
     app::{App, Startup, Update},
-    color::*,
+    color::{
+        palettes::css::{BLACK, WHITE},
+        *,
+    },
     core_pipeline::{fxaa::Fxaa, smaa::Smaa},
     ecs::system::Commands,
     gizmos::gizmos::Gizmos,
@@ -15,6 +18,7 @@ use bevy::{
     winit::WinitSettings,
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
+use bevy_prototype_lyon::prelude::*;
 
 fn main() {
     App::new()
@@ -49,6 +53,7 @@ fn main() {
                     enabled: true,
                 },
             },
+            ShapePlugin
         ))
         .insert_resource(WinitSettings::desktop_app())
         .add_systems(Startup, setup)
@@ -59,12 +64,12 @@ fn main() {
                 handle_mouse_move,
                 handle_touch_state,
                 handle_mouse_press,
-                draw_edit_move,
+                //draw_edit_move,
                 update_spline_mode_text,
                 update_cycling_mode_text,
                 curve_fill,
                 draw_curve,
-                draw_control_points,
+                //draw_control_points,
             )
                 .chain(),
         )
@@ -98,7 +103,7 @@ fn setup(mut commands: Commands) {
         points_and_tangents: default_points.into_iter().zip(default_tangents).collect(),
     };
 
-    let curve = form_curve(&default_control_data, spline_mode, cycling_mode);
+    //let curve = form_curve(&default_control_data, spline_mode, cycling_mode);
     //if let Some(curve) = curve {
     //    commands.insert_resource(curve);
     //}
@@ -184,6 +189,11 @@ struct ProcessedCurve {
     interp: Vec<Vec2>,
 }
 
+#[derive(Clone, Component)]
+struct CurrentCurveMarker;
+
+#[derive(Clone, Component)]
+struct LyonMarker;
 /// The control points used to generate a curve. The tangent components are only used in the case of
 /// Hermite interpolation.
 #[derive(Clone, Resource)]
@@ -211,26 +221,44 @@ struct CurrentCurve {
 /// This system uses gizmos to draw the current [`Curve`] by breaking it up into a large number
 /// of line segments.
 fn draw_curve(
-    curves: Query<&ProcessedCurve, (With<Curve>, With<ProcessedCurve>)>,
+    curves: Query<
+        (&ProcessedCurve, Entity),
+        (With<Curve>, With<ProcessedCurve>, Without<LyonMarker>),
+    >,
     mut gizmos: Gizmos,
     current: Res<CurrentCurve>,
+    par_cmd: ParallelCommands,
+    mut commands: Commands,
 ) {
     // Scale resolution with curve length so it doesn't degrade as the length increases.
 
     // Gizmos is not parallel.
-    for curve in curves {
-        //let resolution = 100 * curve..segments().len();
-        //gizmos.linestrip(
-        //    curve.0.iter_positions(resolution).map(|pt| pt.extend(0.0)),
-        //    Color::srgb(1.0, 1.0, 1.0),
-        //);
-        //gizmos.curve_2d(
-        //    &curve.0,
-        //    (0..resolution).map(|n| n as f32 / 100.0),
-        //    Color::srgb(1.0, 1.0, 1.0),
-        //);
-        gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
-    }
+    //for curve in curves {
+    //let resolution = 100 * curve..segments().len();
+    //gizmos.linestrip(
+    //    curve.0.iter_positions(resolution).map(|pt| pt.extend(0.0)),
+    //    Color::srgb(1.0, 1.0, 1.0),
+    //);
+    //gizmos.curve_2d(
+    //    &curve.0,
+    //    (0..resolution).map(|n| n as f32 / 100.0),
+    //    Color::srgb(1.0, 1.0, 1.0),
+    //);
+    //gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
+    //}
+    curves.iter().for_each(|curve| {
+        let mut path = ShapePath::new().move_to(curve.0.interp[0]);
+        for i in curve.0.interp[1..].iter() {
+            path = path.line_to(i.clone());
+            //trace!("point {}",i);
+        }
+
+        commands.entity(curve.1).insert((
+            ShapeBuilder::with(&path).stroke((WHITE, 3.0)).build(),
+            Transform::from_xyz(0., 0., 0.),
+            LyonMarker,
+        ));
+    });
     // Form current curve. To be optimized.
     let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
         return;
@@ -247,11 +275,7 @@ fn draw_curve(
 /// tangent vectors as arrows in the case of a Hermite spline.
 ///
 /// [control points]: ControlPoints
-fn draw_control_points(
-    control_points: Res<CurrentCurve>,
-    spline_mode: Res<SplineMode>,
-    mut gizmos: Gizmos,
-) {
+fn draw_control_points(control_points: Res<CurrentCurve>, spline_mode: Res<SplineMode>) {
     for &(point, tangent) in &control_points.points_and_tangents {
         //gizmos.circle_2d(point, 10.0, Color::srgb(0.0, 1.0, 0.0));
 
@@ -299,6 +323,8 @@ fn form_curve(
         }
     }
 }
+
+fn curve_with_lyon(control_points: &CurrentCurve, mut commands: Commands) {}
 
 // --------------------
 // Text-related Components and Systems
@@ -371,7 +397,7 @@ fn handle_mouse_move(
     mut mouse_position: ResMut<MousePosition>,
 
     mut control_points: ResMut<CurrentCurve>,
-    mut touch_state: ResMut<TouchMove>,
+    touch_state: ResMut<TouchMove>,
     edit_move: Res<MouseEditMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
@@ -417,12 +443,12 @@ fn handle_mouse_move(
 /// of the click-and-drag motion which actually creates new control points.
 fn handle_mouse_press(
     mut button_events: EventReader<MouseButtonInput>,
-    mut touch_events: EventReader<TouchInput>, // Add this line
+    //mut touch_events: EventReader<TouchInput>, // Add this line
     mouse_position: Res<MousePosition>,
     mut edit_move: ResMut<MouseEditMove>,
     mut current_strip: ResMut<CurrentCurve>,
     mut commands: Commands,
-    mut touch_state: ResMut<TouchMove>,
+    //mut touch_state: ResMut<TouchMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
     let Some(mouse_pos) = mouse_position.0 else {
@@ -621,9 +647,8 @@ fn handle_keypress(
 }
 
 fn curve_fill(
-    mut par_commands: ParallelCommands,
-    mut touch_state: ResMut<TouchMove>,
-    mut curves: Query<(Entity, &Curve), (With<Curve>, Without<ProcessedCurve>)>,
+    par_commands: ParallelCommands,
+    curves: Query<(Entity, &Curve), (With<Curve>, Without<ProcessedCurve>)>,
 ) {
     curves.par_iter().for_each(|(id, curve)| {
         let resolution = 9 * curve.0.segments().len();
