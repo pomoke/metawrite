@@ -114,7 +114,11 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(MousePosition::default());
     commands.insert_resource(MouseEditMove::default());
 
+    #[cfg(not(target_arch = "wasm32"))]
     commands.spawn(Camera2d).insert(Fxaa::default());
+
+    #[cfg(target_arch = "wasm32")]
+    commands.spawn(Camera2d);
 
     // The instructions and modes are rendered on the left-hand side in a column.
     let instructions_text = "Draw on the screen.\n\
@@ -243,8 +247,14 @@ struct IncomingPoints {
 /// This system draws incoming strokes.
 fn draw_curve(
     mut curves: Query<
-        (&mut Curve, &mut IncomingPoints, Entity, Option<&mut Mesh2d>, Option<&mut MeshMaterial2d<ColorMaterial>>),
-        (With<Curve>, With<IncomingPoints>),
+        (
+            &mut Curve,
+            &mut IncomingPoints,
+            Entity,
+            Option<&mut Mesh2d>,
+            Option<&mut MeshMaterial2d<ColorMaterial>>,
+        ),
+        (Changed<IncomingPoints>,),
     >,
     //current: Res<CurrentCurve>,
     par_cmd: ParallelCommands,
@@ -269,9 +279,11 @@ fn draw_curve(
     //gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
     //}
 
-    curves
-        .iter_mut()
-        .for_each(|(mut curve, mut incoming, mut entity, mut mesh2d, mut material2d)| {
+    curves.iter_mut().for_each(
+        |(mut curve, mut incoming, mut entity, mut mesh2d, mut material2d)| {
+            if incoming.points.is_empty() {
+                return;
+            }
             curve.points.append(&mut incoming.points);
             if curve.points.len() - curve.which <= 3 {
                 return;
@@ -287,28 +299,58 @@ fn draw_curve(
 
             let resolution = 3 * spline.segments().len();
             let points: Vec<_> = spline.iter_positions(resolution).collect();
-            let mut mesh = Mesh::new(
-                bevy::render::render_resource::PrimitiveTopology::LineStrip,
-                RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-            );
-            mesh.insert_attribute(
-                Mesh::ATTRIBUTE_POSITION,
-                points
-                    .iter()
-                    .map(|p| [p.x, p.y, 0.0])
-                    .collect::<Vec<[f32; 3]>>(),
-            );
+            //let mut mesh = Mesh::new(
+            //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
+            //    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            //);
+            //mesh.insert_attribute(
+            //    Mesh::ATTRIBUTE_POSITION,
+            //    points
+            //        .iter()
+            //        .map(|p| [p.x, p.y, 0.0])
+            //        .collect::<Vec<[f32; 3]>>(),
+            //);
 
-            //par_cmd.command_scope(|mut commands| {
-            commands.entity(entity).with_children(|parent| {
-                parent.spawn((
+            ////par_cmd.command_scope(|mut commands| {
+            //commands.entity(entity).with_children(|parent| {
+            //    parent.spawn((
+            //        Mesh2d(meshs.add(mesh)),
+            //        MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
+            //    ));
+            //});
+            ////});
+            //curve.which = curve.points.len() - 1;
+            if let Some(mesh_entity) = mesh2d {
+                // If a mesh already exists, update its data
+                if let Some(mut mesh) = meshs.get_mut(mesh_entity.id()) {
+                    mesh.insert_attribute(
+                        Mesh::ATTRIBUTE_POSITION,
+                        points
+                            .iter()
+                            .map(|p| [p.x, p.y, 0.0])
+                            .collect::<Vec<[f32; 3]>>(),
+                    );
+                }
+            } else {
+                // If no mesh exists, create a new one as a child of the curve entity
+                let mut mesh = Mesh::new(
+                    bevy::render::render_resource::PrimitiveTopology::LineStrip,
+                    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+                );
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_POSITION,
+                    points
+                        .iter()
+                        .map(|p| [p.x, p.y, 0.0])
+                        .collect::<Vec<[f32; 3]>>(),
+                );
+                commands.entity(entity).insert((
                     Mesh2d(meshs.add(mesh)),
                     MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
                 ));
-            });
-            //});
-            curve.which = curve.points.len() - 1;
-        });
+            }
+        },
+    );
     // Form current curve. To be optimized.
     //let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
     //    return;
@@ -558,9 +600,7 @@ fn handle_mouse_press(
                         which: 0,
                     },
                     CurrentCurveMarker::Mouse,
-                    IncomingPoints {
-                        points: vec![],
-                    },
+                    IncomingPoints { points: vec![] },
                     Transform::default(),
                     Visibility::default(),
                 ));
