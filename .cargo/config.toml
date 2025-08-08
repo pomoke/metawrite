@@ -10,8 +10,7 @@ rustflags = [
 ]
 
 #[target.aarch64-unknown-linux-musl]
-#
-#linker = "aarch64-unknown-linux-musl-clang"
+#linker = "clang"
 #rustflags = [
 #	#"-C", "link-arg=-lclang_rt"
 #	"-C", "link-arg=-fuse-ld=mold",

@@ -1,10 +1,12 @@
-pub mod draw;
 // From demo.
+pub mod input;
+pub mod stroke;
 
 use std::time::Duration;
 
 use bevy::{
     app::{App, Startup, Update},
+    asset::RenderAssetUsages,
     color::{
         palettes::css::{BLACK, WHITE},
         *,
@@ -18,7 +20,7 @@ use bevy::{
     winit::WinitSettings,
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
-use bevy_prototype_lyon::prelude::*;
+//use bevy_prototype_lyon::prelude::*;
 
 fn main() {
     App::new()
@@ -53,7 +55,6 @@ fn main() {
                     enabled: true,
                 },
             },
-            ShapePlugin
         ))
         .insert_resource(WinitSettings::desktop_app())
         .add_systems(Startup, setup)
@@ -65,9 +66,9 @@ fn main() {
                 handle_touch_state,
                 handle_mouse_press,
                 //draw_edit_move,
-                update_spline_mode_text,
-                update_cycling_mode_text,
-                curve_fill,
+                //update_spline_mode_text,
+                //update_cycling_mode_text,
+                //curve_fill,
                 draw_curve,
                 //draw_control_points,
             )
@@ -85,22 +86,22 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(TouchMove::default());
 
     // Starting data for [`ControlPoints`]:
-    let default_points = vec![
-        vec2(-500., -200.),
-        vec2(-250., 250.),
-        vec2(250., 250.),
-        vec2(500., -200.),
-    ];
+    //let default_points = vec![
+    //    vec2(-500., -200.),
+    //    vec2(-250., 250.),
+    //    vec2(250., 250.),
+    //    vec2(500., -200.),
+    //];
 
-    let default_tangents = vec![
-        vec2(0., 200.),
-        vec2(200., 0.),
-        vec2(0., -200.),
-        vec2(-200., 0.),
-    ];
+    //let default_tangents = vec![
+    //    vec2(0., 200.),
+    //    vec2(200., 0.),
+    //    vec2(0., -200.),
+    //    vec2(-200., 0.),
+    //];
 
     let default_control_data = CurrentCurve {
-        points_and_tangents: default_points.into_iter().zip(default_tangents).collect(),
+        points_and_tangents: vec![],
     };
 
     //let curve = form_curve(&default_control_data, spline_mode, cycling_mode);
@@ -133,8 +134,8 @@ fn setup(mut commands: Commands) {
         })
         .with_children(|parent| {
             parent.spawn((Text::new(instructions_text), style.clone()));
-            parent.spawn((SplineModeText, Text(spline_mode_text), style.clone()));
-            parent.spawn((CyclingModeText, Text(cycling_mode_text), style.clone()));
+            //parent.spawn((SplineModeText, Text(spline_mode_text), style.clone()));
+            //parent.spawn((CyclingModeText, Text(cycling_mode_text), style.clone()));
         });
 }
 
@@ -181,8 +182,20 @@ impl std::fmt::Display for CyclingMode {
 }
 
 /// Finished curves.
+#[derive(Clone, Component, Default)]
+struct Curve {
+    points: Vec<Vec2>,
+    which: usize,
+}
+
 #[derive(Clone, Component)]
-struct Curve(CubicCurve<Vec2>);
+struct SplineCurve(CubicCurve<Vec2>);
+
+/// Curve timing annotation, use with `Curve`
+#[derive(Clone, Component)]
+struct CurveTiming {
+    strokes: Vec<(usize, usize, Duration)>,
+}
 
 #[derive(Clone, Component)]
 struct ProcessedCurve {
@@ -190,15 +203,24 @@ struct ProcessedCurve {
 }
 
 #[derive(Clone, Component)]
-struct CurrentCurveMarker;
+enum CurrentCurveMarker {
+    Mouse,
+    Touch(u64),
+    Network(usize),
+}
 
 #[derive(Clone, Component)]
-struct LyonMarker;
+struct CurveMeshMarker;
 /// The control points used to generate a curve. The tangent components are only used in the case of
 /// Hermite interpolation.
 #[derive(Clone, Resource)]
 struct CurrentCurve {
     points_and_tangents: Vec<(Vec2, Vec2)>,
+}
+
+#[derive(Clone, Component, Resource)]
+struct IncomingPoints {
+    points: Vec<Vec2>,
 }
 
 /// This system is responsible for updating the [`Curve`] when the [control points] or active modes
@@ -218,17 +240,17 @@ struct CurrentCurve {
 //    let next_curve = form_curve(&control_points, *spline_mode, *cycling_mode);
 //}
 
-/// This system uses gizmos to draw the current [`Curve`] by breaking it up into a large number
-/// of line segments.
+/// This system draws incoming strokes.
 fn draw_curve(
-    curves: Query<
-        (&ProcessedCurve, Entity),
-        (With<Curve>, With<ProcessedCurve>, Without<LyonMarker>),
+    mut curves: Query<
+        (&mut Curve, &mut IncomingPoints, Entity, Option<&mut Mesh2d>, Option<&mut MeshMaterial2d<ColorMaterial>>),
+        (With<Curve>, With<IncomingPoints>),
     >,
-    mut gizmos: Gizmos,
-    current: Res<CurrentCurve>,
+    //current: Res<CurrentCurve>,
     par_cmd: ParallelCommands,
     mut commands: Commands,
+    mut meshs: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Scale resolution with curve length so it doesn't degrade as the length increases.
 
@@ -246,30 +268,61 @@ fn draw_curve(
     //);
     //gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
     //}
-    curves.iter().for_each(|curve| {
-        let mut path = ShapePath::new().move_to(curve.0.interp[0]);
-        for i in curve.0.interp[1..].iter() {
-            path = path.line_to(i.clone());
-            //trace!("point {}",i);
-        }
 
-        commands.entity(curve.1).insert((
-            ShapeBuilder::with(&path).stroke((WHITE, 3.0)).build(),
-            Transform::from_xyz(0., 0., 0.),
-            LyonMarker,
-        ));
-    });
+    curves
+        .iter_mut()
+        .for_each(|(mut curve, mut incoming, mut entity, mut mesh2d, mut material2d)| {
+            curve.points.append(&mut incoming.points);
+            if curve.points.len() - curve.which <= 3 {
+                return;
+            };
+            let Some(spline) = form_curve(
+                &curve.points[curve.which..],
+                SplineMode::Cardinal,
+                CyclingMode::NotCyclic,
+            ) else {
+                return;
+            };
+            // Emit curve
+
+            let resolution = 3 * spline.segments().len();
+            let points: Vec<_> = spline.iter_positions(resolution).collect();
+            let mut mesh = Mesh::new(
+                bevy::render::render_resource::PrimitiveTopology::LineStrip,
+                RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            );
+            mesh.insert_attribute(
+                Mesh::ATTRIBUTE_POSITION,
+                points
+                    .iter()
+                    .map(|p| [p.x, p.y, 0.0])
+                    .collect::<Vec<[f32; 3]>>(),
+            );
+
+            //par_cmd.command_scope(|mut commands| {
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Mesh2d(meshs.add(mesh)),
+                    MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
+                ));
+            });
+            //});
+            curve.which = curve.points.len() - 1;
+        });
     // Form current curve. To be optimized.
-    let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
-        return;
-    };
-    let resolution = 3 * curve.0.segments().len();
-    gizmos.curve_2d(
-        &curve.0,
-        (0..resolution).map(|n| n as f32 / 3. as f32),
-        Color::srgb(1.0, 1.0, 1.0),
-    );
+    //let Some(curve) = form_curve(&current, SplineMode::Cardinal, CyclingMode::NotCyclic) else {
+    //    return;
+    //};
+    //let resolution = 3 * curve.points.segments().len();
+    //gizmos.curve_2d(
+    //    &curve.points,
+    //    (0..resolution).map(|n| n as f32 / 3. as f32),
+    //    Color::srgb(1.0, 1.0, 1.0),
+    //);
 }
+
+// This does not hold for collaborative editing.
+fn draw_current_curve(current: Res<CurrentCurve>, mut commands: Commands) {}
 
 /// This system uses gizmos to draw the current [control points] as circles, displaying their
 /// tangent vectors as arrows in the case of a Hermite spline.
@@ -289,39 +342,42 @@ fn draw_control_points(control_points: Res<CurrentCurve>, spline_mode: Res<Splin
 ///
 /// [control points]: ControlPoints
 fn form_curve(
-    control_points: &CurrentCurve,
+    control_points: &[Vec2],
     spline_mode: SplineMode,
     cycling_mode: CyclingMode,
-) -> Option<Curve> {
-    let (points, tangents): (Vec<_>, Vec<_>) =
-        control_points.points_and_tangents.iter().copied().unzip();
+) -> Option<CubicCurve<Vec2>> {
+    //let (points, tangents): (Vec<_>, Vec<_>) =
+    //    control_points.iter().copied().unzip();
 
-    match spline_mode {
-        SplineMode::Hermite => {
-            let spline = CubicHermite::new(points, tangents);
-            match cycling_mode {
-                CyclingMode::NotCyclic => spline.to_curve().ok(),
-                CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }
-            .map(|x| Curve(x))
-        }
-        SplineMode::Cardinal => {
-            let spline = CubicCardinalSpline::new_catmull_rom(points);
-            match cycling_mode {
-                CyclingMode::NotCyclic => spline.to_curve().ok(),
-                CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }
-            .map(|x| Curve(x))
-        }
-        SplineMode::B => {
-            let spline = CubicBSpline::new(points);
-            match cycling_mode {
-                CyclingMode::NotCyclic => spline.to_curve().ok(),
-                CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
-            }
-            .map(|x| Curve(x))
-        }
-    }
+    //match spline_mode {
+    //    SplineMode::Hermite => {
+    //        let spline = CubicHermite::new(points, tangents);
+    //        match cycling_mode {
+    //            CyclingMode::NotCyclic => spline.to_curve().ok(),
+    //            CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
+    //        }
+    //        .map(|x| SplineCurve(x))
+    //    }
+    //    SplineMode::Cardinal => {
+    //        let spline = CubicCardinalSpline::new_catmull_rom(points);
+    //        match cycling_mode {
+    //            CyclingMode::NotCyclic => spline.to_curve().ok(),
+    //            CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
+    //        }
+    //        .map(|x| SplineCurve(x))
+    //    }
+    //    SplineMode::B => {
+    //        let spline = CubicBSpline::new(points);
+    //        match cycling_mode {
+    //            CyclingMode::NotCyclic => spline.to_curve().ok(),
+    //            CyclingMode::Cyclic => spline.to_curve_cyclic().ok(),
+    //        }
+    //        .map(|x| SplineCurve(x))
+    //    }
+    //}
+    CubicCardinalSpline::new_catmull_rom(control_points.iter().copied())
+        .to_curve()
+        .ok()
 }
 
 fn curve_with_lyon(control_points: &CurrentCurve, mut commands: Commands) {}
@@ -397,6 +453,7 @@ fn handle_mouse_move(
     mut mouse_position: ResMut<MousePosition>,
 
     mut control_points: ResMut<CurrentCurve>,
+    mut target: Query<(&mut IncomingPoints, &CurrentCurveMarker, Entity)>,
     touch_state: ResMut<TouchMove>,
     edit_move: Res<MouseEditMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
@@ -413,14 +470,23 @@ fn handle_mouse_move(
         else {
             return;
         };
-        control_points
-            .points_and_tangents
-            .push((current, vec2(0., 0.)));
+        //control_points
+        //    .points_and_tangents
+        //    .push((current, vec2(0., 0.)));
+
+        // This is spawn by click handler.
+        if let Some((mut points, marker, entity)) = target
+            .iter_mut()
+            .filter(|(_, marker, _)| matches!(marker, CurrentCurveMarker::Mouse))
+            .next()
+        {
+            points.points.push(current);
+        }
     }
 
-    debug!("Reading movements...");
+    //debug!("Reading movements...");
     for touch_event in touch_events.read() {
-        debug!("touch {:?}", touch_event);
+        //debug!("touch {:?}", touch_event);
         if Some(touch_event.id) == touch_state.which {
             // Consider only the first touch (single touch)
             mouse_position.0 = Some(touch_event.position);
@@ -435,6 +501,13 @@ fn handle_mouse_move(
             control_points
                 .points_and_tangents
                 .push((current, vec2(0., 0.)));
+            if let Some((mut points, marker, entity)) = target
+                .iter_mut()
+                .filter(|(_, marker, _)| matches!(marker, CurrentCurveMarker::Touch(0)))
+                .next()
+            {
+                points.points.push(current);
+            }
         }
     }
 }
@@ -448,6 +521,7 @@ fn handle_mouse_press(
     mut edit_move: ResMut<MouseEditMove>,
     mut current_strip: ResMut<CurrentCurve>,
     mut commands: Commands,
+    mut target: Query<(&mut IncomingPoints, &CurrentCurveMarker, Entity)>,
     //mut touch_state: ResMut<TouchMove>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
@@ -475,9 +549,21 @@ fn handle_mouse_press(
                     continue;
                 };
                 current_strip.points_and_tangents.clear();
-                current_strip
-                    .points_and_tangents
-                    .push((start_point, vec2(0., 0.)));
+                //current_strip
+                //    .points_and_tangents
+                //    .push((start_point, vec2(0., 0.)));
+                commands.spawn((
+                    Curve {
+                        points: vec![start_point],
+                        which: 0,
+                    },
+                    CurrentCurveMarker::Mouse,
+                    IncomingPoints {
+                        points: vec![],
+                    },
+                    Transform::default(),
+                    Visibility::default(),
+                ));
             }
 
             ButtonState::Released => {
@@ -504,31 +590,37 @@ fn handle_mouse_press(
                 // Reset the edit move since we've consumed it.
                 edit_move.start = None;
 
-                let curve =
-                    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
-                if let Some(curve) = curve {
-                    commands.spawn((Curve(curve.0),));
+                //let curve =
+                //    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
+                //if let Some(curve) = curve {
+                //    commands.spawn((Curve(curve.0),));
+                //}
+                //current_strip.points_and_tangents.clear();
+                if let Some((mut points, marker, entity)) = target
+                    .iter_mut()
+                    .filter(|(_, marker, _)| matches!(marker, CurrentCurveMarker::Mouse))
+                    .next()
+                {
+                    commands.entity(entity).remove::<CurrentCurveMarker>();
                 }
-                current_strip.points_and_tangents.clear();
             }
         }
     }
 }
 
+/// Handle touch/pen input.
 fn handle_touch_state(
     mut touch_events: EventReader<TouchInput>, // Add this line
     mut edit_move: ResMut<MouseEditMove>,
     mut current_strip: ResMut<CurrentCurve>,
     mut commands: Commands,
     mut touch_state: ResMut<TouchMove>,
+    currents: Query<
+        (&Curve, &mut ProcessedCurve, &CurrentCurveMarker, Entity),
+        (With<Curve>, With<ProcessedCurve>, With<CurrentCurveMarker>),
+    >,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
-    //let Some(mouse_pos) = mouse_position.0 else {
-    //    return;
-    //};
-
-    // Handle click and drag behavior
-
     for touch_event in touch_events.read() {
         // Consider only the first touch (single touch)
         debug!("Touch event {:?}", touch_event);
@@ -546,9 +638,19 @@ fn handle_touch_state(
                     continue;
                 };
                 current_strip.points_and_tangents.clear();
-                current_strip
-                    .points_and_tangents
-                    .push((start_point, vec2(0., 0.)));
+                //current_strip
+                //    .points_and_tangents
+                //    .push((start_point, vec2(0., 0.)));
+                commands.spawn((
+                    Curve {
+                        points: vec![],
+                        which: 0,
+                    },
+                    CurrentCurveMarker::Touch(0),
+                    IncomingPoints { points: vec![] },
+                    Transform::default(),
+                    Visibility::default(),
+                ));
             }
             TouchPhase::Ended => {
                 let Some(start) = edit_move.start else {
@@ -570,12 +672,19 @@ fn handle_touch_state(
                 edit_move.start = None;
                 touch_state.which = None;
 
-                let curve =
-                    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
-                if let Some(curve) = curve {
-                    commands.spawn((Curve(curve.0),));
+                //let curve =
+                //    form_curve(&current_strip, SplineMode::Cardinal, CyclingMode::NotCyclic);
+                //if let Some(curve) = curve {
+                //    commands.spawn((Curve(curve.0),));
+                //}
+                //current_strip.points_and_tangents.clear();
+                if let Some((mut points, _, marker, entity)) = currents
+                    .iter()
+                    .filter(|(_, _, marker, _)| matches!(marker, CurrentCurveMarker::Touch(_)))
+                    .next()
+                {
+                    commands.entity(entity).remove::<CurrentCurveMarker>();
                 }
-                current_strip.points_and_tangents.clear();
             }
             _ => {} // Do nothing for Moved or Cancelled phases here
         }
@@ -646,17 +755,17 @@ fn handle_keypress(
     }
 }
 
-fn curve_fill(
-    par_commands: ParallelCommands,
-    curves: Query<(Entity, &Curve), (With<Curve>, Without<ProcessedCurve>)>,
-) {
-    curves.par_iter().for_each(|(id, curve)| {
-        let resolution = 9 * curve.0.segments().len();
-        let points: Vec<_> = curve.0.iter_positions(resolution).collect();
-        par_commands.command_scope(|mut commands| {
-            commands
-                .entity(id)
-                .insert(ProcessedCurve { interp: points });
-        })
-    });
-}
+//fn curve_fill(
+//    par_commands: ParallelCommands,
+//    curves: Query<(Entity, &Curve), (With<Curve>, Without<ProcessedCurve>)>,
+//) {
+//    curves.par_iter().for_each(|(id, curve)| {
+//        let resolution = 9 * curve.0.segments().len();
+//        let points: Vec<_> = curve.0.iter_positions(resolution).collect();
+//        par_commands.command_scope(|mut commands| {
+//            commands
+//                .entity(id)
+//                .insert(ProcessedCurve { interp: points });
+//        })
+//    });
+//}

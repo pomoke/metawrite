@@ -5,7 +5,7 @@ edition = "2024"
 license = "GPL-3.0-OR-LATER"
 
 [dependencies]
-bevy = {version = "0.16.1", features = ["wayland"]}
+bevy = {version = "0.16.1"}
 bevy_dev_tools = "0.16.1"
 bevy_prototype_lyon = { git = "https://github.com/rparrett/bevy_prototype_lyon", branch = "fix-dynamic-examples" }
 #bevy_prototype_lyon = "0.13.0"
