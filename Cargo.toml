@@ -8,7 +8,12 @@ license = "GPL-3.0-OR-LATER"
 bevy = {version = "0.16.1"}
 bevy_dev_tools = "0.16.1"
 bevy_prototype_lyon = { git = "https://github.com/rparrett/bevy_prototype_lyon", branch = "fix-dynamic-examples" }
+bevy_render = "0.16.1"
+bevy_screen_diagnostics = "0.8.1"
 #bevy_prototype_lyon = "0.13.0"
+
+[features]
+diagnostic = []
 
 [patch.crates-io]
 #wgpu = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}

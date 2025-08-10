@@ -12,15 +12,18 @@ use bevy::{
         *,
     },
     core_pipeline::{fxaa::Fxaa, smaa::Smaa},
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     ecs::system::Commands,
     gizmos::gizmos::Gizmos,
     input::{ButtonState, mouse::MouseButtonInput, touch::TouchPhase},
     math::{cubic_splines::*, vec2},
     prelude::*,
+    render::mesh::{Indices, VertexAttributeValues},
     winit::WinitSettings,
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
-//use bevy_prototype_lyon::prelude::*;
+
+const VERTEX_BUFFER_SIZE: usize = 2048;
 
 fn main() {
     App::new()
@@ -32,6 +35,16 @@ fn main() {
                 }),
                 ..Default::default()
             }),
+            #[cfg(feature = "diagnostic")]
+            LogDiagnosticsPlugin::default(),
+            #[cfg(feature = "diagnostic")]
+            FrameTimeDiagnosticsPlugin::default(),
+            #[cfg(feature = "diagnostic")]
+            bevy::diagnostic::EntityCountDiagnosticsPlugin,
+            #[cfg(feature = "diagnostic")]
+            bevy::diagnostic::SystemInformationDiagnosticsPlugin,
+            #[cfg(feature = "diagnostic")]
+            bevy_render::diagnostic::RenderDiagnosticsPlugin,
             FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextFont {
@@ -227,6 +240,18 @@ struct IncomingPoints {
     points: Vec<Vec2>,
 }
 
+#[derive(Clone, Component)]
+struct CurveMeshInfo {
+    used: usize,
+    current: usize,
+}
+
+#[derive(Bundle)]
+struct CurveMesh {
+    mesh: Mesh2d,
+    info: CurveMeshInfo,
+}
+
 /// This system is responsible for updating the [`Curve`] when the [control points] or active modes
 /// change.
 ///
@@ -251,7 +276,8 @@ fn draw_curve(
             &mut Curve,
             &mut IncomingPoints,
             Entity,
-            Option<&mut Mesh2d>,
+            Option<(&mut Mesh2d)>,
+            Option<(&mut CurveMeshInfo)>,
             Option<&mut MeshMaterial2d<ColorMaterial>>,
         ),
         (Changed<IncomingPoints>,),
@@ -280,7 +306,7 @@ fn draw_curve(
     //}
 
     curves.iter_mut().for_each(
-        |(mut curve, mut incoming, mut entity, mut mesh2d, mut material2d)| {
+        |(mut curve, mut incoming, mut entity, mut mesh2d, mut curve_mesh_info, mut material2d)| {
             if incoming.points.is_empty() {
                 return;
             }
@@ -297,7 +323,8 @@ fn draw_curve(
             };
             // Emit curve
 
-            let resolution = 3 * spline.segments().len();
+            let resolution = calc_resolution(&curve.points[curve.which..]) * spline.segments().len();
+            info!("resolution {}", resolution);
             let points: Vec<_> = spline.iter_positions(resolution).collect();
             //let mut mesh = Mesh::new(
             //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
@@ -323,31 +350,63 @@ fn draw_curve(
             if let Some(mesh_entity) = mesh2d {
                 // If a mesh already exists, update its data
                 if let Some(mut mesh) = meshs.get_mut(mesh_entity.id()) {
-                    mesh.insert_attribute(
-                        Mesh::ATTRIBUTE_POSITION,
-                        points
-                            .iter()
-                            .map(|p| [p.x, p.y, 0.0])
-                            .collect::<Vec<[f32; 3]>>(),
-                    );
+                    let mut mesh_info = curve_mesh_info.unwrap();
+                    let new_size = mesh_info.used + points.len();
+                    if let Some(VertexAttributeValues::Float32x3(positions)) =
+                        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+                    {
+                        if positions.len() < new_size {
+                            positions.resize(new_size.max(positions.len() * 2), [0.0, 0.0, 0.0]);
+                            info!("mesh resized to {}", positions.len());
+                        }
+                        for (i, p) in points.iter().enumerate() {
+                            positions[mesh_info.used + i] = [p.x, p.y, 0.0];
+                        }
+                        mesh.insert_indices(Indices::U32( (0..(mesh_info.used-1) as u32).collect() ));
+                    }
+                    //if let Some(indices) = mesh.indices_mut() {
+                    //    match indices {
+                    //        Indices::U32(k) => {
+                    //            if k.len() < new_size {
+                    //                k.resize(new_size.max(k.len() * 2), 0);
+                    //            }
+                    //            for i in 0..(points.len()) {
+                    //                k[mesh_info.used + i] = (mesh_info.used + i) as u32;
+                    //            }
+                    //        }
+                    //        _ => {
+                    //            panic!("should be 32bit indice!");
+                    //        }
+                    //    }
+                    //}
+                    //mesh.insert_indices(Indic);
+                    mesh_info.used += points.len();
+                    curve.which = curve.points.len() - 1;
                 }
             } else {
                 // If no mesh exists, create a new one as a child of the curve entity
-                let mut mesh = Mesh::new(
-                    bevy::render::render_resource::PrimitiveTopology::LineStrip,
-                    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-                );
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_POSITION,
-                    points
-                        .iter()
-                        .map(|p| [p.x, p.y, 0.0])
-                        .collect::<Vec<[f32; 3]>>(),
-                );
+                //let mut mesh = Mesh::new(
+                //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
+                //    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+                //);
+                let mut mesh = create_curve_mesh(VERTEX_BUFFER_SIZE);
+                if let Some(VertexAttributeValues::Float32x3(positions)) =
+                    mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+                {
+                    for (i, p) in points.iter().enumerate() {
+                        positions[i] = [p.x, p.y, 0.0];
+                    }
+                }
+                let mut indices: Vec<_> = (0..(points.len() - 1) as u32).collect();
+                indices.reserve(VERTEX_BUFFER_SIZE);
+                mesh.insert_indices(Indices::U32(indices));
                 commands.entity(entity).insert((
                     Mesh2d(meshs.add(mesh)),
                     MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
+                    CurveMeshInfo { used: points.len(), current: 0 },
                 ));
+                curve.which = curve.points.len() - 1;
+
             }
         },
     );
@@ -683,11 +742,13 @@ fn handle_touch_state(
                 //    .push((start_point, vec2(0., 0.)));
                 commands.spawn((
                     Curve {
-                        points: vec![],
+                        points: Vec::with_capacity(VERTEX_BUFFER_SIZE),
                         which: 0,
                     },
                     CurrentCurveMarker::Touch(0),
-                    IncomingPoints { points: vec![] },
+                    IncomingPoints {
+                        points: Vec::with_capacity(32),
+                    },
                     Transform::default(),
                     Visibility::default(),
                 ));
@@ -809,3 +870,37 @@ fn handle_keypress(
 //        })
 //    });
 //}
+
+fn create_curve_mesh(capacity: usize) -> Mesh {
+    let mut mesh = Mesh::new(
+        bevy::render::render_resource::PrimitiveTopology::LineStrip,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+
+    let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; capacity];
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+
+    mesh
+}
+
+fn resize_curve_mesh(mesh: &mut Mesh, new_size: usize) {
+    if let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        if positions.len() < new_size {
+            positions.resize(new_size.max(positions.len() * 2), [0.0, 0.0, 0.0]);
+        }
+    }
+}
+
+fn calc_resolution(points: &[Vec2]) -> usize {
+    points
+        .iter()
+        .zip(points[1..].iter())
+        .map(|(x, y)| x.distance(y.clone()).ceil() as usize)
+        .map(|x| x / 3)
+        .max()
+        .unwrap_or(1)
+        .max(1)
+        .min(12)
+}
