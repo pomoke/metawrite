@@ -23,6 +23,10 @@ use bevy::{
     winit::WinitSettings,
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
+#[cfg(feature = "inspect")]
+use bevy_inspector_egui::InspectorOptions;
+#[cfg(feature = "inspect")]
+use bevy_inspector_egui::{bevy_egui::EguiPlugin, prelude::*, quick::WorldInspectorPlugin};
 
 const VERTEX_BUFFER_SIZE: usize = 2048;
 
@@ -47,6 +51,10 @@ pub fn main() {
             bevy::diagnostic::SystemInformationDiagnosticsPlugin,
             #[cfg(feature = "diagnostic")]
             bevy_render::diagnostic::RenderDiagnosticsPlugin,
+            #[cfg(feature = "inspect")]
+            EguiPlugin::default(),
+            #[cfg(feature = "inspect")]
+            WorldInspectorPlugin::new(),
             FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextFont {
@@ -90,6 +98,13 @@ pub fn main() {
             )
                 .chain(),
         )
+        .register_type::<Curve>()
+        .register_type::<CurrentCurve>()
+        .register_type::<MouseEditMove>()
+        .register_type::<MousePosition>()
+        .register_type::<TouchMove>()
+        .register_type::<CurrentCurveMarker>()
+        .register_type::<CurveMeshInfo>()
         .run();
 }
 
@@ -218,48 +233,57 @@ impl std::fmt::Display for CyclingMode {
 }
 
 /// Finished curves.
-#[derive(Clone, Component, Default)]
+#[derive(Clone, Component, Default, Reflect)]
+#[reflect(Component)]
 struct Curve {
     points: Vec<Vec2>,
     which: usize,
 }
 
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Reflect)]
+#[reflect(Component)]
 struct SplineCurve(CubicCurve<Vec2>);
 
 /// Curve timing annotation, use with `Curve`
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Default, Reflect)]
+#[reflect(Component)]
 struct CurveTiming {
     strokes: Vec<(usize, usize, Duration)>,
 }
 
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Reflect)]
+#[reflect(Component)]
 struct ProcessedCurve {
     interp: Vec<Vec2>,
 }
 
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Reflect)]
+#[reflect(Component)]
 enum CurrentCurveMarker {
     Mouse,
     Touch(u64),
     Network(usize),
 }
 
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Reflect)]
+#[reflect(Component)]
 struct CurveMeshMarker;
 /// The control points used to generate a curve. The tangent components are only used in the case of
 /// Hermite interpolation.
-#[derive(Clone, Resource)]
+#[derive(Clone, Resource, Reflect)]
+#[reflect(Resource)]
 struct CurrentCurve {
     points_and_tangents: Vec<(Vec2, Vec2)>,
 }
 
-#[derive(Clone, Component, Resource)]
+#[derive(Clone, Component, Resource, Reflect)]
+#[reflect(Resource)]
 struct IncomingPoints {
     points: Vec<Vec2>,
 }
 
-#[derive(Clone, Component)]
+#[derive(Clone, Component, Reflect)]
+#[reflect(Component)]
 struct CurveMeshInfo {
     used: usize,
     current: usize,
@@ -514,11 +538,13 @@ fn curve_with_lyon(control_points: &CurrentCurve, mut commands: Commands) {}
 // --------------------
 
 /// Marker component for the text node that displays the current [`SplineMode`].
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct SplineModeText;
 
 /// Marker component for the text node that displays the current [`CyclingMode`].
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct CyclingModeText;
 
 fn update_spline_mode_text(
@@ -559,18 +585,21 @@ fn update_cycling_mode_text(
 ///
 /// When the user is not doing a click-and-drag motion, the `start` field is `None`. When the user
 /// presses the left mouse button, the location of that press is temporarily stored in the field.
-#[derive(Clone, Default, Resource)]
+#[derive(Clone, Default, Resource, Reflect)]
+#[reflect(Resource)]
 struct MouseEditMove {
     start: Option<Vec2>,
 }
 
-#[derive(Clone, Default, Resource)]
+#[derive(Clone, Default, Resource, Reflect)]
+#[reflect(Resource)]
 struct TouchMove {
     which: Option<u64>,
 }
 
 /// The current mouse position, if known.
-#[derive(Clone, Default, Resource)]
+#[derive(Clone, Default, Resource, Reflect)]
+#[reflect(Resource)]
 struct MousePosition(Option<Vec2>);
 
 /// Update the current cursor position and track it in the [`MousePosition`] resource.
