@@ -1,46 +1,49 @@
 // From demo.
-pub mod input;
-pub mod stroke;
 pub mod args;
+pub mod input;
+pub mod storage;
+pub mod stroke;
+pub mod ui;
 
 use std::time::Duration;
 
 use bevy::{
-    app::{App, Startup, Update},
-    asset::RenderAssetUsages,
-    color::{
+    app::{App, Startup, Update}, asset::RenderAssetUsages, audio::AudioPlugin, color::{
         palettes::css::{BLACK, WHITE},
         *,
-    },
-    core_pipeline::{fxaa::Fxaa, smaa::Smaa},
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    ecs::system::Commands,
-    gizmos::gizmos::Gizmos,
-    input::{ButtonState, mouse::MouseButtonInput, touch::TouchPhase},
-    math::{cubic_splines::*, vec2},
-    prelude::*,
-    render::mesh::{Indices, VertexAttributeValues},
-    winit::WinitSettings,
+    }, core_pipeline::{fxaa::Fxaa, smaa::Smaa}, diagnostic::{DiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}, ecs::system::Commands, gizmos::gizmos::Gizmos, input::{mouse::MouseButtonInput, touch::TouchPhase, ButtonState}, math::{cubic_splines::*, vec2}, pbr::PbrPlugin, prelude::*, render::{
+        mesh::{Indices, VertexAttributeValues},
+    }, scene::ScenePlugin, sprite::SpritePlugin, winit::WinitSettings
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 #[cfg(feature = "inspect")]
 use bevy_inspector_egui::InspectorOptions;
 #[cfg(feature = "inspect")]
 use bevy_inspector_egui::{bevy_egui::EguiPlugin, prelude::*, quick::WorldInspectorPlugin};
+use bevy_pkv::PkvStore;
+use serde::{Deserialize, Serialize};
 
-const VERTEX_BUFFER_SIZE: usize = 2048;
+const VERTEX_BUFFER_SIZE: usize = 4096;
 
 #[bevy_main]
 pub fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    present_mode: bevy::window::PresentMode::AutoNoVsync,
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        present_mode: bevy::window::PresentMode::AutoNoVsync,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            }),
+                })
+                //.disable::<PipelinedRenderingPlugin>()
+                //.disable::<PbrPlugin>()
+                //.disable::<AudioPlugin>()
+                //.disable::<AnimationPlugin>()
+                //.disable::<ScenePlugin>()
+                //.disable::<DiagnosticsPlugin>()
+            ,
             #[cfg(feature = "diagnostic")]
             LogDiagnosticsPlugin::default(),
             #[cfg(feature = "diagnostic")]
@@ -74,20 +77,27 @@ pub fn main() {
                         alpha: 1.,
                     }),
                     // We can also set the refresh interval for the FPS counter
-                    refresh_interval: core::time::Duration::from_millis(100),
+                    refresh_interval: core::time::Duration::from_millis(250),
                     enabled: true,
                 },
             },
         ))
         .insert_resource(WinitSettings::desktop_app())
+        .insert_resource(PkvStore::new("metawrite", "metawrite"))
         .add_systems(Startup, setup)
         .add_systems(
-            Update,
+            PreUpdate,
             (
                 handle_keypress,
                 handle_mouse_move,
                 handle_touch_state,
                 handle_mouse_press,
+            )
+                .chain(),
+        )
+        .add_systems(
+            Update,
+            (
                 //draw_edit_move,
                 //update_spline_mode_text,
                 //update_cycling_mode_text,
@@ -95,8 +105,7 @@ pub fn main() {
                 draw_curve,
                 //draw_control_points,
                 handle_button,
-            )
-                .chain(),
+            ),
         )
         .register_type::<Curve>()
         .register_type::<CurrentCurve>()
@@ -233,9 +242,9 @@ impl std::fmt::Display for CyclingMode {
 }
 
 /// Finished curves.
-#[derive(Clone, Component, Default, Reflect)]
+#[derive(Clone, Component, Default, Reflect, Debug, Serialize, Deserialize)]
 #[reflect(Component)]
-struct Curve {
+pub struct Curve {
     points: Vec<Vec2>,
     which: usize,
 }
@@ -319,9 +328,8 @@ fn draw_curve(
             &mut Curve,
             &mut IncomingPoints,
             Entity,
-            Option<(&mut Mesh2d)>,
-            Option<(&mut CurveMeshInfo)>,
-            Option<&mut MeshMaterial2d<ColorMaterial>>,
+            Option<&Mesh2d>,
+            Option<&mut CurveMeshInfo>,
         ),
         (Changed<IncomingPoints>,),
     >,
@@ -347,9 +355,8 @@ fn draw_curve(
     //);
     //gizmos.linestrip_2d(curve.interp.iter().map(|x| *x), Color::srgb(1.0, 1.0, 1.0));
     //}
-
     curves.iter_mut().for_each(
-        |(mut curve, mut incoming, mut entity, mut mesh2d, mut curve_mesh_info, mut material2d)| {
+        |(mut curve, mut incoming, entity, mesh2d, curve_mesh_info)| {
             if incoming.points.is_empty() {
                 return;
             }
@@ -358,6 +365,7 @@ fn draw_curve(
             if curve.points.len() - curve.which <= 3 {
                 return;
             };
+            //info!("incoming {} points", curve.points.len() - curve.which);
             let Some(spline) = form_curve(
                 &curve.points[curve.which..],
                 SplineMode::Cardinal,
@@ -369,7 +377,7 @@ fn draw_curve(
 
             let resolution =
                 calc_resolution(&curve.points[curve.which..]) * spline.segments().len();
-            info!("resolution {}", resolution);
+            //info!("resolution {}", resolution);
             let points: Vec<_> = spline.iter_positions(resolution).collect();
             //let mut mesh = Mesh::new(
             //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
@@ -446,7 +454,6 @@ fn draw_curve(
                     }
                 }
                 let mut indices: Vec<_> = (0..(points.len() - 1) as u32).collect();
-                indices.reserve(VERTEX_BUFFER_SIZE);
                 mesh.insert_indices(Indices::U32(indices));
                 commands.entity(entity).insert((
                     Mesh2d(meshs.add(mesh)),
@@ -714,7 +721,7 @@ fn handle_mouse_press(
                         which: 0,
                     },
                     CurrentCurveMarker::Mouse,
-                    IncomingPoints { points: vec![] },
+                    IncomingPoints { points: Vec::with_capacity(32) },
                     Transform::default(),
                     Visibility::default(),
                 ));
@@ -756,6 +763,7 @@ fn handle_mouse_press(
                     .next()
                 {
                     commands.entity(entity).remove::<CurrentCurveMarker>();
+                    commands.entity(entity).remove::<IncomingPoints>();
                 }
             }
         }
@@ -764,15 +772,12 @@ fn handle_mouse_press(
 
 /// Handle touch/pen input.
 fn handle_touch_state(
-    mut touch_events: EventReader<TouchInput>, // Add this line
+    mut touch_events: EventReader<TouchInput>,
     mut edit_move: ResMut<MouseEditMove>,
     mut current_strip: ResMut<CurrentCurve>,
     mut commands: Commands,
     mut touch_state: ResMut<TouchMove>,
-    currents: Query<
-        (&Curve, &mut ProcessedCurve, &CurrentCurveMarker, Entity),
-        (With<Curve>, With<ProcessedCurve>, With<CurrentCurveMarker>),
-    >,
+    currents: Query<(&Curve, &mut ProcessedCurve, &CurrentCurveMarker, Entity)>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
     for touch_event in touch_events.read() {
@@ -957,7 +962,7 @@ fn calc_resolution(points: &[Vec2]) -> usize {
         .max()
         .unwrap_or(1)
         .max(1)
-        .min(12)
+        .min(4)
 }
 
 #[derive(Clone, Component, Debug)]

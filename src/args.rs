@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tuning {
@@ -45,7 +45,7 @@ pub enum AAMode {
     Msaa4,
     Msaa8,
     Fxaa,
-    Taa
+    Taa,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,7 +56,9 @@ pub enum PowerPref {
     Auto,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for Tuning {
     fn default() -> Self {
