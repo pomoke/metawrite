@@ -8,12 +8,25 @@ pub mod ui;
 use std::time::Duration;
 
 use bevy::{
-    app::{App, Startup, Update}, asset::RenderAssetUsages, audio::AudioPlugin, color::{
+    app::{App, Startup, Update},
+    asset::RenderAssetUsages,
+    audio::AudioPlugin,
+    color::{
         palettes::css::{BLACK, WHITE},
         *,
-    }, core_pipeline::{fxaa::Fxaa, smaa::Smaa}, diagnostic::{DiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}, ecs::system::Commands, gizmos::gizmos::Gizmos, input::{mouse::MouseButtonInput, touch::TouchPhase, ButtonState}, math::{cubic_splines::*, vec2}, pbr::PbrPlugin, prelude::*, render::{
-        mesh::{Indices, VertexAttributeValues},
-    }, scene::ScenePlugin, sprite::SpritePlugin, winit::WinitSettings
+    },
+    core_pipeline::{fxaa::Fxaa, smaa::Smaa},
+    diagnostic::{DiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    ecs::system::Commands,
+    gizmos::gizmos::Gizmos,
+    input::{ButtonState, mouse::MouseButtonInput, touch::TouchPhase},
+    math::{cubic_splines::*, vec2},
+    pbr::PbrPlugin,
+    prelude::*,
+    render::mesh::{Indices, VertexAttributeValues},
+    scene::ScenePlugin,
+    sprite::SpritePlugin,
+    winit::WinitSettings,
 };
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 #[cfg(feature = "inspect")]
@@ -21,6 +34,8 @@ use bevy_inspector_egui::InspectorOptions;
 #[cfg(feature = "inspect")]
 use bevy_inspector_egui::{bevy_egui::EguiPlugin, prelude::*, quick::WorldInspectorPlugin};
 use bevy_pkv::PkvStore;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy_render::pipelined_rendering::PipelinedRenderingPlugin;
 use serde::{Deserialize, Serialize};
 
 const VERTEX_BUFFER_SIZE: usize = 4096;
@@ -36,14 +51,12 @@ pub fn main() {
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-                //.disable::<PipelinedRenderingPlugin>()
-                //.disable::<PbrPlugin>()
-                //.disable::<AudioPlugin>()
-                //.disable::<AnimationPlugin>()
-                //.disable::<ScenePlugin>()
-                //.disable::<DiagnosticsPlugin>()
-            ,
+                }),
+                //.disable::<PipelinedRenderingPlugin>(), //.disable::<PbrPlugin>()
+            //.disable::<AudioPlugin>()
+            //.disable::<AnimationPlugin>()
+            //.disable::<ScenePlugin>()
+            //.disable::<DiagnosticsPlugin>()
             #[cfg(feature = "diagnostic")]
             LogDiagnosticsPlugin::default(),
             #[cfg(feature = "diagnostic")]
@@ -155,7 +168,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(MouseEditMove::default());
 
     #[cfg(not(target_arch = "wasm32"))]
-    commands.spawn(Camera2d).insert(Fxaa::default());
+    commands.spawn(Camera2d).insert(Msaa::Sample4);
 
     #[cfg(target_arch = "wasm32")]
     commands.spawn(Camera2d);
@@ -266,7 +279,7 @@ struct ProcessedCurve {
     interp: Vec<Vec2>,
 }
 
-#[derive(Clone, Component, Reflect)]
+#[derive(Debug, Clone, Component, Reflect)]
 #[reflect(Component)]
 enum CurrentCurveMarker {
     Mouse,
@@ -304,6 +317,12 @@ struct CurveMesh {
     info: CurveMeshInfo,
 }
 
+#[derive(Debug, Clone, Event, Component, Reflect)]
+struct PointEvent {
+    pub points: Vec<Vec2>,
+    pub source: CurrentCurveMarker,
+}
+
 /// This system is responsible for updating the [`Curve`] when the [control points] or active modes
 /// change.
 ///
@@ -331,10 +350,9 @@ fn draw_curve(
             Option<&Mesh2d>,
             Option<&mut CurveMeshInfo>,
         ),
-        (Changed<IncomingPoints>,),
+        (Changed<IncomingPoints>, With<CurrentCurveMarker>),
     >,
     //current: Res<CurrentCurve>,
-    par_cmd: ParallelCommands,
     mut commands: Commands,
     mut meshs: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -362,15 +380,21 @@ fn draw_curve(
             }
             // We should compute 4 points at a time.
             curve.points.append(&mut incoming.points);
-            if curve.points.len() - curve.which <= 3 {
+            if curve.points.len() - curve.which <= 0 || curve.points.len() < 4 {
                 return;
             };
             //info!("incoming {} points", curve.points.len() - curve.which);
+            let full_line =  curve.points.len() - curve.which >= 4;
             let Some(spline) = form_curve(
-                &curve.points[curve.which..],
+                &curve.points[if full_line {
+                    curve.which..
+                } else {
+                    (curve.points.len() - 4)..
+                }],
                 SplineMode::Cardinal,
                 CyclingMode::NotCyclic,
             ) else {
+                warn!("Failed to form spline!");
                 return;
             };
             // Emit curve
@@ -379,6 +403,7 @@ fn draw_curve(
                 calc_resolution(&curve.points[curve.which..]) * spline.segments().len();
             //info!("resolution {}", resolution);
             let points: Vec<_> = spline.iter_positions(resolution).collect();
+            let points = if full_line {points} else {points[((curve.points.len() - curve.which - 1)*resolution)..].to_owned()};
             //let mut mesh = Mesh::new(
             //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
             //    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
@@ -402,7 +427,7 @@ fn draw_curve(
             //curve.which = curve.points.len() - 1;
             if let Some(mesh_entity) = mesh2d {
                 // If a mesh already exists, update its data
-                if let Some(mut mesh) = meshs.get_mut(mesh_entity.id()) {
+                if let Some(mesh) = meshs.get_mut(mesh_entity.id()) {
                     let mut mesh_info = curve_mesh_info.unwrap();
                     let new_size = mesh_info.used + points.len();
                     if let Some(VertexAttributeValues::Float32x3(positions)) =
@@ -427,9 +452,10 @@ fn draw_curve(
                                 //    k[mesh_info.used + i] = (mesh_info.used + i) as u32;
                                 //}
                                 //k.resize(new_size, 0);
-                                for i in 0..(points.len()) {
-                                    k.push((mesh_info.used + i) as u32);
-                                }
+                                k.extend(
+                                    (mesh_info.used as u32)
+                                        ..((mesh_info.used + points.len()) as u32),
+                                );
                             }
                             _ => {
                                 panic!("should be 32bit indice!");
@@ -478,9 +504,6 @@ fn draw_curve(
     //    Color::srgb(1.0, 1.0, 1.0),
     //);
 }
-
-// This does not hold for collaborative editing.
-fn draw_current_curve(current: Res<CurrentCurve>, mut commands: Commands) {}
 
 /// This system uses gizmos to draw the current [control points] as circles, displaying their
 /// tangent vectors as arrows in the case of a Hermite spline.
@@ -615,7 +638,6 @@ fn handle_mouse_move(
     mut touch_events: EventReader<TouchInput>,
     mut mouse_position: ResMut<MousePosition>,
 
-    mut control_points: ResMut<CurrentCurve>,
     mut target: Query<(&mut IncomingPoints, &CurrentCurveMarker, Entity)>,
     touch_state: ResMut<TouchMove>,
     edit_move: Res<MouseEditMove>,
@@ -661,9 +683,6 @@ fn handle_mouse_move(
             else {
                 return;
             };
-            control_points
-                .points_and_tangents
-                .push((current, vec2(0., 0.)));
             if let Some((mut points, marker, entity)) = target
                 .iter_mut()
                 .filter(|(_, marker, _)| matches!(marker, CurrentCurveMarker::Touch(0)))
@@ -721,7 +740,9 @@ fn handle_mouse_press(
                         which: 0,
                     },
                     CurrentCurveMarker::Mouse,
-                    IncomingPoints { points: Vec::with_capacity(32) },
+                    IncomingPoints {
+                        points: Vec::with_capacity(32),
+                    },
                     Transform::default(),
                     Visibility::default(),
                 ));
@@ -887,7 +908,6 @@ fn handle_keypress(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut spline_mode: ResMut<SplineMode>,
     mut cycling_mode: ResMut<CyclingMode>,
-    mut control_points: ResMut<CurrentCurve>,
 ) {
     // S => change spline mode
     if keyboard.just_pressed(KeyCode::KeyS) {
@@ -907,9 +927,6 @@ fn handle_keypress(
     }
 
     // R => remove last control point
-    if keyboard.just_pressed(KeyCode::KeyR) {
-        control_points.points_and_tangents.pop();
-    }
 
     if keyboard.just_pressed(KeyCode::KeyQ) {
         std::process::exit(0);
@@ -958,11 +975,11 @@ fn calc_resolution(points: &[Vec2]) -> usize {
         .iter()
         .zip(points[1..].iter())
         .map(|(x, y)| x.distance(y.clone()).ceil() as usize)
-        .map(|x| x / 3)
+        .map(|x| x / 4)
         .max()
         .unwrap_or(1)
         .max(1)
-        .min(4)
+        .min(32)
 }
 
 #[derive(Clone, Component, Debug)]
@@ -985,3 +1002,11 @@ fn handle_button(
         }
     }
 }
+
+fn apply_draw_stroke(
+    mut control_points: Changed<ResMut<CurrentCurve>>,
+    mut target: Query<(&mut IncomingPoints, &CurrentCurveMarker, Entity)>,
+) {
+}
+
+fn finish_stroke(mut target: Query<(&mut IncomingPoints, &CurrentCurveMarker, Entity)>) {}

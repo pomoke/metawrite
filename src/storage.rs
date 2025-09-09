@@ -50,7 +50,6 @@ pub enum Elements {
     Shape(),
 }
 
-
 #[derive(Component)]
 struct LoadTask(Task<Result<Project, String>>);
 
