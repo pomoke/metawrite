@@ -33,6 +33,7 @@ use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy_inspector_egui::InspectorOptions;
 #[cfg(feature = "inspect")]
 use bevy_inspector_egui::{bevy_egui::EguiPlugin, prelude::*, quick::WorldInspectorPlugin};
+#[cfg(all(not(target_arch = "wasm32"), feature = "storage"))]
 use bevy_pkv::PkvStore;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_render::pipelined_rendering::PipelinedRenderingPlugin;
@@ -51,12 +52,18 @@ pub fn main() {
                         ..Default::default()
                     }),
                     ..Default::default()
-                }),
+                })
+                .disable::<bevy::pbr::PbrPlugin>()
+                .disable::<bevy::animation::AnimationPlugin>()
+                .disable::<bevy::gltf::GltfPlugin>()
+                .disable::<bevy::audio::AudioPlugin>(),
+                //.disable::<bevy::render::RenderPlugin>(),
                 //.disable::<PipelinedRenderingPlugin>(), //.disable::<PbrPlugin>()
-            //.disable::<AudioPlugin>()
-            //.disable::<AnimationPlugin>()
-            //.disable::<ScenePlugin>()
-            //.disable::<DiagnosticsPlugin>()
+                //.disable::<AudioPlugin>()
+                //.disable::<AnimationPlugin>()
+                //.disable::<ScenePlugin>()
+                //.disable::<DiagnosticsPlugin>()
+            bevy_mod_debugdump::CommandLineArgs,
             #[cfg(feature = "diagnostic")]
             LogDiagnosticsPlugin::default(),
             #[cfg(feature = "diagnostic")]
@@ -96,7 +103,6 @@ pub fn main() {
             },
         ))
         .insert_resource(WinitSettings::desktop_app())
-        .insert_resource(PkvStore::new("metawrite", "metawrite"))
         .add_systems(Startup, setup)
         .add_systems(
             PreUpdate,
@@ -384,7 +390,7 @@ fn draw_curve(
                 return;
             };
             //info!("incoming {} points", curve.points.len() - curve.which);
-            let full_line =  curve.points.len() - curve.which >= 4;
+            let full_line = curve.points.len() - curve.which >= 4;
             let Some(spline) = form_curve(
                 &curve.points[if full_line {
                     curve.which..
@@ -403,7 +409,11 @@ fn draw_curve(
                 calc_resolution(&curve.points[curve.which..]) * spline.segments().len();
             //info!("resolution {}", resolution);
             let points: Vec<_> = spline.iter_positions(resolution).collect();
-            let points = if full_line {points} else {points[((curve.points.len() - curve.which - 1)*resolution)..].to_owned()};
+            let points = if full_line {
+                points
+            } else {
+                points[((curve.points.len() - curve.which - 1) * resolution)..].to_owned()
+            };
             //let mut mesh = Mesh::new(
             //    bevy::render::render_resource::PrimitiveTopology::LineStrip,
             //    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,

@@ -12,7 +12,8 @@ bevy_render = "0.16.1"
 bevy_screen_diagnostics = "0.8.1"
 serde = { version = "1.0.219", features = ["derive"] }
 bevy-inspector-egui = { version = "0.33", optional = true }
-bevy_pkv = "0.13.0"
+bevy_pkv = {version = "0.13.0", optional = true}
+bevy_mod_debugdump = "0.13.0"
 #bevy_prototype_lyon = "0.13.0"
 
 [lib]
@@ -23,6 +24,7 @@ bench = false
 diagnostic = []
 reflect = []
 inspect = ["bevy-inspector-egui"]
+storage = []
 
 [patch.crates-io]
 #wgpu = {git = "https://github.com/pomoke/wgpu.git", branch = "wgpu-24-robust"}

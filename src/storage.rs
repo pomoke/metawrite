@@ -14,6 +14,7 @@ use bevy::{
     state::state::States,
     tasks::Task,
 };
+#[cfg(feature = "storage")]
 use bevy_pkv::PkvStore;
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,7 @@ struct LoadTask(Task<Result<Project, String>>);
 #[derive(Component)]
 struct SaveTask(Task<Result<(), String>>);
 
+#[cfg(feature = "storage")]
 pub fn do_save(
     curves: Query<&Curve>,
     overlay_event: EventWriter<OverlayEvent>,
@@ -63,4 +65,5 @@ pub fn do_save(
 ) {
 }
 
+#[cfg(feature = "storage")]
 pub fn do_load(commands: Commands, pkv: Res<PkvStore>) {}
